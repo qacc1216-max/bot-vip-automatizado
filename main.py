@@ -14,7 +14,7 @@ LINK_REGISTRO = "https://stockity-r3.com?a=9e29d7ed3cab&t=0"
 LINK_GRUPO_VIP = "https://t.me/+CwS4WQkN6c80YTYx"
 
 # 🎬 PEGA AQUÍ EL FILE ID CUANDO EL BOT TE LO ENVIE
-VIDEO_FILE_ID = "TU_FILE_ID_DE_TELEGRAM_AQUI"
+VIDEO_FILE_ID = "BAACAgEAAxkBAAMialGwteT-YHVgaHhNTRPl5aReFucAAloIAAKgVpFGObGcQkEezi88BA"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
