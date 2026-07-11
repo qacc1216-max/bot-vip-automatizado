@@ -12,7 +12,9 @@ MI_TELEGRAM_ID = int(os.environ.get('ADMIN_ID', 1630411628))
 # ENLACES OFICIALES INTEGRADOS
 LINK_REGISTRO = "https://stockity-r3.com?a=9e29d7ed3cab&t=0"
 LINK_GRUPO_VIP = "https://t.me/+CwS4WQkN6c80YTYx"
-LINK_VIDEO_DRIVE = "https://docs.google.com/uc?export=download&id=16drzdOYhjaR5tVcWWwM77Sqn7RQ-v72H"
+
+# 🎬 PEGA AQUÍ EL FILE ID CUANDO EL BOT TE LO ENVIE
+VIDEO_FILE_ID = "TU_FILE_ID_DE_TELEGRAM_AQUI"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
@@ -20,7 +22,7 @@ app = Flask(__name__)
 # Listas para guardar lo que llega de Affiliate Top
 traders_registrados = set()
 traders_depositados = set()
-user_data = {}  # Guarda el estado del usuario
+user_data = {}
 
 def actualizar_usuario(chat_id, step):
     user_data[chat_id] = {
@@ -28,6 +30,17 @@ def actualizar_usuario(chat_id, step):
         'last_interaction': time.time(),
         'reminded': False
     }
+
+# 🛠️ CAPTURADOR DE FILE ID MEJORADO (Responde directo en el chat sin importar el ID)
+@bot.message_handler(content_types=['video'])
+def capturar_file_id(message):
+    file_id = message.video.file_id
+    text_id = (
+        "✅ **¡VIDEO RECIBIDO EN EL SERVIDOR!**\n\n"
+        "Copiá este código largo de abajo y pegalo en la línea 15 de tu GitHub:\n\n"
+        f"`{file_id}`"
+    )
+    bot.reply_to(message, text_id, parse_mode="Markdown")
 
 # 📥 WEBHOOK / POSTBACK: Recibe alertas de Affiliate Top
 @app.route('/postback', methods=['GET'])
@@ -70,11 +83,11 @@ def send_welcome(message):
     )
     bot.send_message(chat_id, texto, reply_markup=markup, parse_mode="Markdown")
     
-    # Enviamos el video tutorial completo directo desde el inicio
-    try:
-        bot.send_video(chat_id, LINK_VIDEO_DRIVE, caption="🎬 Tutorial completo de registro paso a paso.")
-    except Exception:
-        pass
+    if VIDEO_FILE_ID != "TU_FILE_ID_DE_TELEGRAM_AQUI":
+        try:
+            bot.send_video(chat_id, VIDEO_FILE_ID, caption="🎬 Tutorial completo de registro paso a paso.")
+        except Exception:
+            pass
 
 # 2. BOT PIDE EL ID PARA VERIFICAR EL REGISTRO
 @bot.callback_query_handler(func=lambda call: call.data == "pedir_id_registro")
@@ -99,7 +112,6 @@ def procesar_texto(message):
     id_ingresado = message.text.strip()
     step_actual = user_data[chat_id].get('step')
     
-    # ---- CONTROL DEL PASO 2: VERIFICAR REGISTRO ----
     if step_actual == 2:
         if id_ingresado in traders_registrados:
             user_data[chat_id]['trader_id'] = id_ingresado
@@ -109,7 +121,6 @@ def procesar_texto(message):
             btn_verificar_depo = types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito")
             markup.add(btn_verificar_depo)
             
-            # Tu texto exacto configurado para el paso del depósito
             texto_depo = (
                 "✅ **Registro confirmado**\n\n"
                 "Para unirte al canal VIP y acceder a nuestras mentorías privadas diarias (en TikTok y por mensaje), "
@@ -143,7 +154,7 @@ def verificar_id_deposito(call):
             "¡Bienvenido al equipo!"
         )
         bot.send_message(chat_id, texto_exito)
-        actualizar_usuario(chat_id, 4)  # Finalizado
+        actualizar_usuario(chat_id, 4)
     else:
         bot.send_message(
             chat_id,
@@ -177,10 +188,15 @@ def verificar_usuarios_colgados():
 
 @app.route('/')
 def home():
-    return "Bot VIP Inteligente Activo 24/7", 200
+    return "Bot VIP con Captura Directa Activo", 200
 
 if __name__ == "__main__":
-    bot.remove_webhook()
+    # Forzamos a borrar cualquier conexión vieja de Telegram para liberar el bot
+    try:
+        bot.delete_webhook()
+    except Exception:
+        pass
+        
     threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=telebot.util.update_types)).start()
     threading.Thread(target=verificar_usuarios_colgados, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
