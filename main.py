@@ -112,10 +112,13 @@ def procesar_texto(message):
     id_ingresado = message.text.strip()
     step_actual = user_data[chat_id].get('step')
     
+    # ---- CONTROL DEL PASO 2: VERIFICAR REGISTRO ----
     if step_actual == 2:
         if id_ingresado in traders_registrados:
+            # ✅ CORRECCIÓN: Guardamos primero el estado y aseguramos el trader_id dentro del diccionario
+            user_data[chat_id]['step'] = 3
+            user_data[chat_id]['last_interaction'] = time.time()
             user_data[chat_id]['trader_id'] = id_ingresado
-            actualizar_usuario(chat_id, 3)
             
             markup = types.InlineKeyboardMarkup()
             btn_verificar_depo = types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito")
@@ -135,7 +138,6 @@ def procesar_texto(message):
                 "Asegurate de haber completado tu registro con el enlace oficial del paso 1. "
                 "Si lo acabás de hacer, aguardá un minutito y **volvé a escribir tu ID** aquí abajo para reintentar:"
             )
-
 # 4. BOTÓN CUANDO YA DEPOSITÓ
 @bot.callback_query_handler(func=lambda call: call.data == "verificar_id_deposito")
 def verificar_id_deposito(call):
