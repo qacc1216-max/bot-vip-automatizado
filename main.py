@@ -66,7 +66,7 @@ def send_welcome(message):
     )
     bot.send_message(chat_id, texto, reply_markup=markup, parse_mode="Markdown")
 
-# 2. EXPLICACIÓN DEL DEPÓSITO
+# 2. EXPLICACIÓN DEL DEPÓSITO (TEXTO ACTUALIZADO)
 @bot.callback_query_handler(func=lambda call: call.data == "paso_deposito")
 def paso_deposito(call):
     chat_id = call.message.chat.id
@@ -76,10 +76,12 @@ def paso_deposito(call):
     btn_id = types.InlineKeyboardButton("🆔 Ya deposité, ingresar mi ID", callback_data="pedir_id")
     markup.add(btn_id)
     
+    # Tu texto personalizado integrado
     texto = (
-        "💵 **Paso 2: Realizá tu depósito**\n\n"
-        "Para activar tu cuenta en el VIP, realizá el depósito mínimo en la plataforma.\n\n"
-        "Una vez hecho, tocá el botón de abajo para que el sistema valide tu cuenta al instante."
+        "✅ **Registro confirmado**\n\n"
+        "Para unirte al canal VIP y acceder a nuestras mentorías privadas diarias (en TikTok y por mensaje), "
+        "solo necesitas realizar una inversión en tu cuenta. Puedes comenzar con cualquier cantidad que te resulte cómoda. "
+        "Esta inversión es completamente tuya, no es una cuota fija, y puedes retirarla en cualquier momento.❗️❗️"
     )
     bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode="Markdown")
 
@@ -146,7 +148,7 @@ def verificar_usuarios_colgados():
                         
                         texto_reminder = (
                             "👋 ¡Hola! Vi que te interesó sumarte a nuestra comunidad VIP pero no completaste los pasos. 📈\n\n"
-                            "Recordá que los cupos semanales son limitados y te estás perdiendo las operaciones.\n\n"
+                            "Recordá que los cupos semanales son limited y te estás perdiendo las operaciones.\n\n"
                             "Si tuviste alguna duda con tu ID o el depósito, tocá abajo y lo resolvemos al toque:"
                         )
                         bot.send_message(chat_id, texto_reminder, reply_markup=markup)
