@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import logging
 import threading
@@ -7,26 +6,28 @@ import threading
 import telebot
 from telebot import types
 from flask import Flask, request
+from supabase import create_client, Client
 
 # ----------------------- CONFIG -----------------------
-# El bot NO arranca si faltan estas variables de entorno.
-# En Render: Settings -> Environment -> agregá TELEGRAM_TOKEN y ADMIN_ID.
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 ADMIN_ID_RAW = os.environ.get('ADMIN_ID')
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 
-if not TOKEN:
-    raise RuntimeError("Falta la variable de entorno TELEGRAM_TOKEN")
-if not ADMIN_ID_RAW:
-    raise RuntimeError("Falta la variable de entorno ADMIN_ID")
+for var_name, var_val in [
+    ('TELEGRAM_TOKEN', TOKEN),
+    ('ADMIN_ID', ADMIN_ID_RAW),
+    ('SUPABASE_URL', SUPABASE_URL),
+    ('SUPABASE_KEY', SUPABASE_KEY),
+]:
+    if not var_val:
+        raise RuntimeError(f"Falta la variable de entorno {var_name}")
 
 MI_TELEGRAM_ID = int(ADMIN_ID_RAW)
 
-# Enlaces (estos no son secretos, está bien que queden en el código)
 LINK_REGISTRO = os.environ.get('LINK_REGISTRO', "https://stockity-r3.com?a=9e29d7ed3cab&t=0")
 LINK_GRUPO_VIP = os.environ.get('LINK_GRUPO_VIP', "https://t.me/+CwS4WQkN6c80YTYx")
 VIDEO_FILE_ID = os.environ.get('VIDEO_FILE_ID', "")
-
-DATA_FILE = "data.json"
 
 # ----------------------- LOGGING -----------------------
 logging.basicConfig(
@@ -37,56 +38,47 @@ logger = logging.getLogger("bot_vip")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
-
-# ----------------------- PERSISTENCIA SIMPLE (JSON) -----------------------
-# Evita perder todo si Render reinicia el servicio.
-# Para volúmenes más grandes de usuarios, conviene pasar a SQLite/Postgres,
-# pero para empezar esto alcanza y no agrega infraestructura.
-
-_lock = threading.Lock()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def cargar_datos():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                data = json.load(f)
-                data["user_data"] = {int(k): v for k, v in data.get("user_data", {}).items()}
-                data["traders_registrados"] = set(data.get("traders_registrados", []))
-                data["traders_depositados"] = set(data.get("traders_depositados", []))
-                return data
-        except Exception as e:
-            logger.error(f"Error cargando {DATA_FILE}: {e}")
-    return {"user_data": {}, "traders_registrados": set(), "traders_depositados": set()}
+# ----------------------- HELPERS DE BASE DE DATOS -----------------------
+
+def get_usuario(chat_id):
+    res = supabase.table("usuarios").select("*").eq("chat_id", chat_id).execute()
+    return res.data[0] if res.data else None
 
 
-def guardar_datos():
-    with _lock:
-        try:
-            with open(DATA_FILE, "w") as f:
-                json.dump({
-                    "user_data": user_data,
-                    "traders_registrados": list(traders_registrados),
-                    "traders_depositados": list(traders_depositados),
-                }, f)
-        except Exception as e:
-            logger.error(f"Error guardando {DATA_FILE}: {e}")
-
-
-_estado = cargar_datos()
-user_data = _estado["user_data"]
-traders_registrados = _estado["traders_registrados"]
-traders_depositados = _estado["traders_depositados"]
-
-
-def actualizar_usuario(chat_id, step):
-    user_data[chat_id] = {
-        'step': step,
-        'last_interaction': time.time(),
-        'reminded': False,
-        'trader_id': user_data.get(chat_id, {}).get('trader_id'),
+def upsert_usuario(chat_id, step=None, last_interaction=None, reminded=None, trader_id=None):
+    actual = get_usuario(chat_id) or {}
+    payload = {
+        "chat_id": chat_id,
+        "step": step if step is not None else actual.get("step", 1),
+        "last_interaction": last_interaction if last_interaction is not None else time.time(),
+        "reminded": reminded if reminded is not None else actual.get("reminded", False),
+        "trader_id": trader_id if trader_id is not None else actual.get("trader_id"),
     }
-    guardar_datos()
+    supabase.table("usuarios").upsert(payload).execute()
+
+
+def trader_registrado(trader_id):
+    res = supabase.table("traders").select("*").eq("trader_id", trader_id).execute()
+    return bool(res.data and res.data[0].get("registrado"))
+
+
+def trader_depositado(trader_id):
+    res = supabase.table("traders").select("*").eq("trader_id", trader_id).execute()
+    return bool(res.data and res.data[0].get("depositado"))
+
+
+def marcar_trader(trader_id, registrado=None, depositado=None):
+    res = supabase.table("traders").select("*").eq("trader_id", trader_id).execute()
+    actual = res.data[0] if res.data else {}
+    payload = {
+        "trader_id": trader_id,
+        "registrado": registrado if registrado is not None else actual.get("registrado", False),
+        "depositado": depositado if depositado is not None else actual.get("depositado", False),
+    }
+    supabase.table("traders").upsert(payload).execute()
 
 
 # ----------------------- CAPTURADOR DE FILE ID -----------------------
@@ -94,11 +86,7 @@ def actualizar_usuario(chat_id, step):
 def capturar_file_id(message):
     file_id = message.video.file_id
     logger.info(f"Video recibido, file_id: {file_id}")
-    bot.reply_to(
-        message,
-        f"✅ Video recibido. file_id:\n`{file_id}`",
-        parse_mode="Markdown",
-    )
+    bot.reply_to(message, f"✅ Video recibido. file_id:\n`{file_id}`", parse_mode="Markdown")
 
 
 # ----------------------- WEBHOOK / POSTBACK -----------------------
@@ -114,15 +102,13 @@ def affiliate_postback():
     trader_id = trader_id.strip()
 
     if evento == 'registro':
-        traders_registrados.add(trader_id)
+        marcar_trader(trader_id, registrado=True)
     elif evento == 'deposito':
-        traders_depositados.add(trader_id)
-        traders_registrados.add(trader_id)
+        marcar_trader(trader_id, registrado=True, depositado=True)
     else:
         logger.warning(f"Evento desconocido en postback: {evento}")
         return "evento inválido", 400
 
-    guardar_datos()
     logger.info(f"Postback: trader {trader_id} -> {evento}")
 
     try:
@@ -137,7 +123,7 @@ def affiliate_postback():
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    actualizar_usuario(chat_id, 1)
+    upsert_usuario(chat_id, step=1, last_interaction=time.time(), reminded=False)
     logger.info(f"Nuevo /start de {chat_id}")
 
     markup = types.InlineKeyboardMarkup()
@@ -162,7 +148,7 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data == "pedir_id_registro")
 def pedir_id_registro(call):
     chat_id = call.message.chat.id
-    actualizar_usuario(chat_id, 2)
+    upsert_usuario(chat_id, step=2, last_interaction=time.time())
     bot.edit_message_text(
         "Escribí tu ID de la plataforma acá abajo para verificar tu registro:",
         chat_id,
@@ -174,18 +160,15 @@ def pedir_id_registro(call):
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def procesar_texto(message):
     chat_id = message.chat.id
-    if chat_id not in user_data:
+    usuario = get_usuario(chat_id)
+    if not usuario:
         return
 
     id_ingresado = message.text.strip()
-    step_actual = user_data[chat_id].get('step')
 
-    if step_actual == 2:
-        if id_ingresado in traders_registrados:
-            user_data[chat_id]['step'] = 3
-            user_data[chat_id]['last_interaction'] = time.time()
-            user_data[chat_id]['trader_id'] = id_ingresado
-            guardar_datos()
+    if usuario.get('step') == 2:
+        if trader_registrado(id_ingresado):
+            upsert_usuario(chat_id, step=3, last_interaction=time.time(), trader_id=id_ingresado)
 
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito"))
@@ -207,18 +190,16 @@ def procesar_texto(message):
 @bot.callback_query_handler(func=lambda call: call.data == "verificar_id_deposito")
 def verificar_id_deposito(call):
     chat_id = call.message.chat.id
-    trader_id = user_data.get(chat_id, {}).get('trader_id')
+    usuario = get_usuario(chat_id)
+    trader_id = usuario.get('trader_id') if usuario else None
 
     if not trader_id:
         bot.send_message(chat_id, "Por favor, ingresá tu ID de registro primero usando /start.")
         return
 
-    if trader_id in traders_depositados:
-        bot.send_message(
-            chat_id,
-            f"Cuenta verificada ✅. Podés unirte al canal VIP acá:\n\n{LINK_GRUPO_VIP}",
-        )
-        actualizar_usuario(chat_id, 4)
+    if trader_depositado(trader_id):
+        bot.send_message(chat_id, f"Cuenta verificada ✅. Podés unirte al canal VIP acá:\n\n{LINK_GRUPO_VIP}")
+        upsert_usuario(chat_id, step=4, last_interaction=time.time())
         logger.info(f"Usuario {chat_id} (trader {trader_id}) accedió al VIP")
     else:
         bot.send_message(
@@ -229,15 +210,17 @@ def verificar_id_deposito(call):
 
 # ----------------------- RECORDATORIO AUTOMÁTICO -----------------------
 def verificar_usuarios_colgados():
-    CHEQUEO_SEGUNDOS = 300       # revisa cada 5 min (antes: 1 hora)
-    UMBRAL_SEGUNDOS = 7200       # recuerda tras 2hs sin avanzar
+    CHEQUEO_SEGUNDOS = 300
+    UMBRAL_SEGUNDOS = 7200
 
     while True:
         time.sleep(CHEQUEO_SEGUNDOS)
         ahora = time.time()
-        for chat_id, data in list(user_data.items()):
-            if data.get('step') in [1, 2, 3] and not data.get('reminded'):
-                if ahora - data['last_interaction'] > UMBRAL_SEGUNDOS:
+        try:
+            res = supabase.table("usuarios").select("*").in_("step", [1, 2, 3]).eq("reminded", False).execute()
+            for usuario in res.data:
+                if ahora - usuario["last_interaction"] > UMBRAL_SEGUNDOS:
+                    chat_id = usuario["chat_id"]
                     try:
                         markup = types.InlineKeyboardMarkup()
                         markup.add(types.InlineKeyboardButton("Continuar proceso", callback_data="pedir_id_registro"))
@@ -247,16 +230,17 @@ def verificar_usuarios_colgados():
                             "Tocá abajo para continuar donde quedaste:",
                             reply_markup=markup,
                         )
-                        user_data[chat_id]['reminded'] = True
-                        guardar_datos()
+                        upsert_usuario(chat_id, reminded=True)
                         logger.info(f"Recordatorio enviado a {chat_id}")
                     except Exception as e:
                         logger.error(f"Error mandando recordatorio a {chat_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error revisando usuarios colgados: {e}")
 
 
 @app.route('/')
 def home():
-    return "Bot VIP activo", 200
+    return "Bot VIP activo (Supabase)", 200
 
 
 if __name__ == "__main__":
