@@ -1,205 +1,275 @@
 import os
+import json
+import time
+import logging
+import threading
+
 import telebot
 from telebot import types
 from flask import Flask, request
-import threading
-import time
 
-# CONFIGURACIÓN ESENCIAL (Se lee de forma segura desde Render)
-TOKEN = os.environ.get('TELEGRAM_TOKEN', '8943668513:AAHnPjS7ZfHUBlS7VpKi35hK6dJpLrEmbk0')
-MI_TELEGRAM_ID = int(os.environ.get('ADMIN_ID', 1630411628))
+# ----------------------- CONFIG -----------------------
+# El bot NO arranca si faltan estas variables de entorno.
+# En Render: Settings -> Environment -> agregá TELEGRAM_TOKEN y ADMIN_ID.
+TOKEN = os.environ.get('TELEGRAM_TOKEN')
+ADMIN_ID_RAW = os.environ.get('ADMIN_ID')
 
-# ENLACES OFICIALES INTEGRADOS
-LINK_REGISTRO = "https://stockity-r3.com?a=9e29d7ed3cab&t=0"
-LINK_GRUPO_VIP = "https://t.me/+CwS4WQkN6c80YTYx"
+if not TOKEN:
+    raise RuntimeError("Falta la variable de entorno TELEGRAM_TOKEN")
+if not ADMIN_ID_RAW:
+    raise RuntimeError("Falta la variable de entorno ADMIN_ID")
 
-# 🎬 PEGA AQUÍ EL FILE ID CUANDO EL BOT TE LO ENVIE
-VIDEO_FILE_ID = "BAACAgEAAxkBAAMialGwteT-YHVgaHhNTRPl5aReFucAAloIAAKgVpFGObGcQkEezi88BA"
+MI_TELEGRAM_ID = int(ADMIN_ID_RAW)
+
+# Enlaces (estos no son secretos, está bien que queden en el código)
+LINK_REGISTRO = os.environ.get('LINK_REGISTRO', "https://stockity-r3.com?a=9e29d7ed3cab&t=0")
+LINK_GRUPO_VIP = os.environ.get('LINK_GRUPO_VIP', "https://t.me/+CwS4WQkN6c80YTYx")
+VIDEO_FILE_ID = os.environ.get('VIDEO_FILE_ID', "")
+
+DATA_FILE = "data.json"
+
+# ----------------------- LOGGING -----------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("bot_vip")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# Listas para guardar lo que llega de Affiliate Top
-traders_registrados = set()
-traders_depositados = set()
-user_data = {}
+# ----------------------- PERSISTENCIA SIMPLE (JSON) -----------------------
+# Evita perder todo si Render reinicia el servicio.
+# Para volúmenes más grandes de usuarios, conviene pasar a SQLite/Postgres,
+# pero para empezar esto alcanza y no agrega infraestructura.
+
+_lock = threading.Lock()
+
+
+def cargar_datos():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+                data["user_data"] = {int(k): v for k, v in data.get("user_data", {}).items()}
+                data["traders_registrados"] = set(data.get("traders_registrados", []))
+                data["traders_depositados"] = set(data.get("traders_depositados", []))
+                return data
+        except Exception as e:
+            logger.error(f"Error cargando {DATA_FILE}: {e}")
+    return {"user_data": {}, "traders_registrados": set(), "traders_depositados": set()}
+
+
+def guardar_datos():
+    with _lock:
+        try:
+            with open(DATA_FILE, "w") as f:
+                json.dump({
+                    "user_data": user_data,
+                    "traders_registrados": list(traders_registrados),
+                    "traders_depositados": list(traders_depositados),
+                }, f)
+        except Exception as e:
+            logger.error(f"Error guardando {DATA_FILE}: {e}")
+
+
+_estado = cargar_datos()
+user_data = _estado["user_data"]
+traders_registrados = _estado["traders_registrados"]
+traders_depositados = _estado["traders_depositados"]
+
 
 def actualizar_usuario(chat_id, step):
     user_data[chat_id] = {
         'step': step,
         'last_interaction': time.time(),
-        'reminded': False
+        'reminded': False,
+        'trader_id': user_data.get(chat_id, {}).get('trader_id'),
     }
+    guardar_datos()
 
-# 🛠️ CAPTURADOR DE FILE ID MEJORADO (Responde directo en el chat sin importar el ID)
+
+# ----------------------- CAPTURADOR DE FILE ID -----------------------
 @bot.message_handler(content_types=['video'])
 def capturar_file_id(message):
     file_id = message.video.file_id
-    text_id = (
-        "✅ **¡VIDEO RECIBIDO EN EL SERVIDOR!**\n\n"
-        "Copiá este código largo de abajo y pegalo en la línea 15 de tu GitHub:\n\n"
-        f"`{file_id}`"
+    logger.info(f"Video recibido, file_id: {file_id}")
+    bot.reply_to(
+        message,
+        f"✅ Video recibido. file_id:\n`{file_id}`",
+        parse_mode="Markdown",
     )
-    bot.reply_to(message, text_id, parse_mode="Markdown")
 
-# 📥 WEBHOOK / POSTBACK: Recibe alertas de Affiliate Top
+
+# ----------------------- WEBHOOK / POSTBACK -----------------------
 @app.route('/postback', methods=['GET'])
 def affiliate_postback():
     trader_id = request.args.get('trader_id')
     evento = request.args.get('event', 'registro')
-    
-    if trader_id:
-        trader_id = trader_id.strip()
-        if evento == 'registro':
-            traders_registrados.add(trader_id)
-        elif evento == 'deposito':
-            traders_depositados.add(trader_id)
-            traders_registrados.add(trader_id)
-        
-        try:
-            bot.send_message(MI_TELEGRAM_ID, f"💰 ¡Postback Recibido!\nID de Trader: {trader_id} realizó un {evento}.")
-        except Exception:
-            pass
-            
+
+    if not trader_id:
+        logger.warning("Postback recibido sin trader_id")
+        return "trader_id faltante", 400
+
+    trader_id = trader_id.strip()
+
+    if evento == 'registro':
+        traders_registrados.add(trader_id)
+    elif evento == 'deposito':
+        traders_depositados.add(trader_id)
+        traders_registrados.add(trader_id)
+    else:
+        logger.warning(f"Evento desconocido en postback: {evento}")
+        return "evento inválido", 400
+
+    guardar_datos()
+    logger.info(f"Postback: trader {trader_id} -> {evento}")
+
+    try:
+        bot.send_message(MI_TELEGRAM_ID, f"💰 Postback: trader {trader_id} realizó {evento}.")
+    except Exception as e:
+        logger.error(f"No se pudo notificar al admin: {e}")
+
     return "OK", 200
 
-# 1. BIENVENIDA DEL BOT + ENVÍO DEL VIDEO TUTORIAL COMPLETO
+
+# ----------------------- 1. /start -----------------------
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
     actualizar_usuario(chat_id, 1)
-    
-    markup = types.InlineKeyboardMarkup()
-    btn_registro = types.InlineKeyboardButton("🔗 Registrarme en la Plataforma", url=LINK_REGISTRO)
-    btn_siguiente = types.InlineKeyboardButton("✅ Ya me registré, verificar mi ID", callback_data="pedir_id_registro")
-    markup.add(btn_registro)
-    markup.add(btn_siguiente)
-    
-    texto = (
-        "¡Hola! 👋 Bienvenido/a al sistema de acceso automático para el **Grupo VIP**.\n\n"
-        "Para ingresar, el primer paso es crearte una cuenta usando nuestro enlace oficial.\n\n"
-        "🎬 **Mirá el video de abajo paso a paso antes de registrarte** para asegurarte de hacerlo bien. "
-        "Luego, tocá el botón para crear tu cuenta:"
-    )
-    bot.send_message(chat_id, texto, reply_markup=markup, parse_mode="Markdown")
-    
-    if VIDEO_FILE_ID != "TU_FILE_ID_DE_TELEGRAM_AQUI":
-        try:
-            bot.send_video(chat_id, VIDEO_FILE_ID, caption="🎬 Tutorial completo de registro paso a paso.")
-        except Exception:
-            pass
+    logger.info(f"Nuevo /start de {chat_id}")
 
-# 2. BOT PIDE EL ID PARA VERIFICAR EL REGISTRO
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔗 Registrarme en la Plataforma", url=LINK_REGISTRO))
+    markup.add(types.InlineKeyboardButton("✅ Ya me registré, verificar mi ID", callback_data="pedir_id_registro"))
+
+    texto = (
+        "¡Hola! 👋 Bienvenido/a al sistema de acceso al Grupo VIP.\n\n"
+        "Para ingresar, el primer paso es crear tu cuenta con nuestro enlace oficial.\n\n"
+        "Mirá el video de abajo antes de registrarte. Luego tocá el botón para crear tu cuenta:"
+    )
+    bot.send_message(chat_id, texto, reply_markup=markup)
+
+    if VIDEO_FILE_ID:
+        try:
+            bot.send_video(chat_id, VIDEO_FILE_ID, caption="Tutorial de registro paso a paso.")
+        except Exception as e:
+            logger.error(f"No se pudo enviar el video a {chat_id}: {e}")
+
+
+# ----------------------- 2. Pide el ID -----------------------
 @bot.callback_query_handler(func=lambda call: call.data == "pedir_id_registro")
 def pedir_id_registro(call):
     chat_id = call.message.chat.id
     actualizar_usuario(chat_id, 2)
-    
     bot.edit_message_text(
-        "📝 Por favor, **escribí tu ID de la plataforma** acá abajo para verificar que tu cuenta se haya creado correctamente con nuestro enlace:", 
-        chat_id, 
+        "Escribí tu ID de la plataforma acá abajo para verificar tu registro:",
+        chat_id,
         call.message.message_id,
-        parse_mode="Markdown"
     )
 
-# 3. PROCESA EL ID Y PIDE EL DEPÓSITO
+
+# ----------------------- 3. Procesa el ID -----------------------
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def procesar_texto(message):
     chat_id = message.chat.id
     if chat_id not in user_data:
         return
-        
+
     id_ingresado = message.text.strip()
     step_actual = user_data[chat_id].get('step')
-    
-    # ---- CONTROL DEL PASO 2: VERIFICAR REGISTRO ----
+
     if step_actual == 2:
         if id_ingresado in traders_registrados:
-            # ✅ CORRECCIÓN: Guardamos primero el estado y aseguramos el trader_id dentro del diccionario
             user_data[chat_id]['step'] = 3
             user_data[chat_id]['last_interaction'] = time.time()
             user_data[chat_id]['trader_id'] = id_ingresado
-            
+            guardar_datos()
+
             markup = types.InlineKeyboardMarkup()
-            btn_verificar_depo = types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito")
-            markup.add(btn_verificar_depo)
-            
-            texto_depo = (
-                "✅ **Registro confirmado**\n\n"
-                "Para unirte al canal VIP y acceder a nuestras mentorías privadas diarias (en TikTok y por mensaje), "
-                "solo necesitas realizar una inversión en tu cuenta. Puedes comenzar con cualquier cantidad que te resulte cómoda. "
-                "Esta inversión es completamente tuya, no es una cuota fija, y puedes retirarla en cualquier momento.❗️❗️"
+            markup.add(types.InlineKeyboardButton("Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito"))
+
+            bot.send_message(
+                chat_id,
+                "Registro confirmado ✅\n\nPara unirte al grupo VIP, realizá una inversión en tu cuenta.",
+                reply_markup=markup,
             )
-            bot.send_message(chat_id, texto_depo, reply_markup=markup, parse_mode="Markdown")
         else:
             bot.send_message(
                 chat_id,
-                "❌ **El ID ingresado aún no aparece en nuestros registros de afiliados.**\n\n"
-                "Asegurate de haber completado tu registro con el enlace oficial del paso 1. "
-                "Si lo acabás de hacer, aguardá un minutito y **volvé a escribir tu ID** aquí abajo para reintentar:"
+                "El ID ingresado aún no aparece en nuestros registros.\n"
+                "Si acabás de registrarte, esperá un momento y volvé a escribir tu ID.",
             )
-# 4. BOTÓN CUANDO YA DEPOSITÓ
+
+
+# ----------------------- 4. Verifica el depósito -----------------------
 @bot.callback_query_handler(func=lambda call: call.data == "verificar_id_deposito")
 def verificar_id_deposito(call):
     chat_id = call.message.chat.id
     trader_id = user_data.get(chat_id, {}).get('trader_id')
-    
+
     if not trader_id:
         bot.send_message(chat_id, "Por favor, ingresá tu ID de registro primero usando /start.")
         return
-        
+
     if trader_id in traders_depositados:
-        texto_exito = (
-            "🎉 ¡Cuenta Verificada Automáticamente! 🎉\n\n"
-            "Comprobamos tu registro y depósito correctamente. Podés unirte al canal VIP ingresando al siguiente enlace:\n\n"
-            f"{LINK_GRUPO_VIP}\n\n"
-            "¡Bienvenido al equipo!"
+        bot.send_message(
+            chat_id,
+            f"Cuenta verificada ✅. Podés unirte al canal VIP acá:\n\n{LINK_GRUPO_VIP}",
         )
-        bot.send_message(chat_id, texto_exito)
         actualizar_usuario(chat_id, 4)
+        logger.info(f"Usuario {chat_id} (trader {trader_id}) accedió al VIP")
     else:
         bot.send_message(
             chat_id,
-            "❌ **Tu ID aún no registra la inversión mínima en el sistema.**\n\n"
-            "Recuerda que el proceso puede tardar unos minutos en impactar tras realizar el depósito. "
-            "Si ya lo hiciste, aguardá un momento y volvé a tocar el botón de verificar."
+            "Tu ID aún no registra la inversión mínima. Esperá unos minutos tras el depósito y volvé a intentar.",
         )
 
-# ⏰ RECORDATORIO AUTOMÁTICO
+
+# ----------------------- RECORDATORIO AUTOMÁTICO -----------------------
 def verificar_usuarios_colgados():
+    CHEQUEO_SEGUNDOS = 300       # revisa cada 5 min (antes: 1 hora)
+    UMBRAL_SEGUNDOS = 7200       # recuerda tras 2hs sin avanzar
+
     while True:
-        time.sleep(3600)
+        time.sleep(CHEQUEO_SEGUNDOS)
         ahora = time.time()
         for chat_id, data in list(user_data.items()):
-            if data['step'] in [1, 2, 3] and not data['reminded']:
-                if ahora - data['last_interaction'] > 7200:
+            if data.get('step') in [1, 2, 3] and not data.get('reminded'):
+                if ahora - data['last_interaction'] > UMBRAL_SEGUNDOS:
                     try:
                         markup = types.InlineKeyboardMarkup()
-                        btn_reintentar = types.InlineKeyboardButton("🚀 Continuar proceso", callback_data="pedir_id_registro")
-                        markup.add(btn_reintentar)
-                        
-                        texto_reminder = (
-                            "👋 ¡Hola! Vi que te interesó sumarte a nuestra comunidad VIP pero no completaste los pasos. 📈\n\n"
-                            "Recordá que los cupos semanales son limitados y te estás perdiendo las operaciones.\n\n"
-                            "Tocá abajo para continuar donde te quedaste:"
+                        markup.add(types.InlineKeyboardButton("Continuar proceso", callback_data="pedir_id_registro"))
+                        bot.send_message(
+                            chat_id,
+                            "Viste que empezaste el proceso para el VIP pero no lo terminaste. "
+                            "Tocá abajo para continuar donde quedaste:",
+                            reply_markup=markup,
                         )
-                        bot.send_message(chat_id, texto_reminder, reply_markup=markup)
                         user_data[chat_id]['reminded'] = True
-                    except Exception:
-                        pass
+                        guardar_datos()
+                        logger.info(f"Recordatorio enviado a {chat_id}")
+                    except Exception as e:
+                        logger.error(f"Error mandando recordatorio a {chat_id}: {e}")
+
 
 @app.route('/')
 def home():
-    return "Bot VIP con Captura Directa Activo", 200
+    return "Bot VIP activo", 200
+
 
 if __name__ == "__main__":
-    # Forzamos a borrar cualquier conexión vieja de Telegram para liberar el bot
     try:
         bot.delete_webhook()
-    except Exception:
-        pass
-        
-    threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=telebot.util.update_types)).start()
+    except Exception as e:
+        logger.error(f"Error borrando webhook viejo: {e}")
+
+    threading.Thread(
+        target=lambda: bot.infinity_polling(allowed_updates=telebot.util.update_types),
+        daemon=True,
+    ).start()
     threading.Thread(target=verificar_usuarios_colgados, daemon=True).start()
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
