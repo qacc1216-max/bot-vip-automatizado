@@ -131,17 +131,20 @@ def send_welcome(message):
     markup.add(types.InlineKeyboardButton("✅ Ya me registré, verificar mi ID", callback_data="pedir_id_registro"))
 
     texto = (
-        "¡Hola! 👋 Bienvenido/a al sistema de acceso al Grupo VIP.\n\n"
-        "Para ingresar, el primer paso es crear tu cuenta con nuestro enlace oficial.\n\n"
-        "Mirá el video de abajo antes de registrarte. Luego tocá el botón para crear tu cuenta:"
+        "¡Hola! 👋 Bienvenido/a al sistema de acceso automático para el **Grupo VIP**.\n\n"
+        "Para ingresar, el primer paso es crearte una cuenta usando nuestro enlace oficial.\n\n"
+        "🎬 **Mirá el video de abajo paso a paso antes de registrarte** para asegurarte de hacerlo bien. "
+        "Luego, tocá el botón para crear tu cuenta:"
     )
-    bot.send_message(chat_id, texto, reply_markup=markup)
+    bot.send_message(chat_id, texto, reply_markup=markup, parse_mode="Markdown")
 
     if VIDEO_FILE_ID:
         try:
-            bot.send_video(chat_id, VIDEO_FILE_ID, caption="Tutorial de registro paso a paso.")
+            bot.send_video(chat_id, VIDEO_FILE_ID, caption="🎬 Tutorial completo de registro paso a paso.")
         except Exception as e:
             logger.error(f"No se pudo enviar el video a {chat_id}: {e}")
+    else:
+        logger.warning("VIDEO_FILE_ID no está configurado, no se envía video")
 
 
 # ----------------------- 2. Pide el ID -----------------------
@@ -150,9 +153,11 @@ def pedir_id_registro(call):
     chat_id = call.message.chat.id
     upsert_usuario(chat_id, step=2, last_interaction=time.time())
     bot.edit_message_text(
-        "Escribí tu ID de la plataforma acá abajo para verificar tu registro:",
+        "📝 Por favor, **escribí tu ID de la plataforma** acá abajo para verificar que tu cuenta se haya creado "
+        "correctamente con nuestro enlace:",
         chat_id,
         call.message.message_id,
+        parse_mode="Markdown",
     )
 
 
@@ -171,18 +176,23 @@ def procesar_texto(message):
             upsert_usuario(chat_id, step=3, last_interaction=time.time(), trader_id=id_ingresado)
 
             markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito"))
+            markup.add(types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito"))
 
-            bot.send_message(
-                chat_id,
-                "Registro confirmado ✅\n\nPara unirte al grupo VIP, realizá una inversión en tu cuenta.",
-                reply_markup=markup,
+            texto_depo = (
+                "✅ **Registro confirmado**\n\n"
+                "Para unirte al canal VIP y acceder a nuestras mentorías privadas diarias (en TikTok y por mensaje), "
+                "solo necesitas realizar una inversión en tu cuenta. Puedes comenzar con cualquier cantidad que te "
+                "resulte cómoda. Esta inversión es completamente tuya, no es una cuota fija, y puedes retirarla en "
+                "cualquier momento.❗️❗️"
             )
+            bot.send_message(chat_id, texto_depo, reply_markup=markup, parse_mode="Markdown")
         else:
             bot.send_message(
                 chat_id,
-                "El ID ingresado aún no aparece en nuestros registros.\n"
-                "Si acabás de registrarte, esperá un momento y volvé a escribir tu ID.",
+                "❌ **El ID ingresado aún no aparece en nuestros registros de afiliados.**\n\n"
+                "Asegurate de haber completado tu registro con el enlace oficial del paso 1. "
+                "Si lo acabás de hacer, aguardá un minutito y **volvé a escribir tu ID** aquí abajo para reintentar:",
+                parse_mode="Markdown",
             )
 
 
@@ -198,13 +208,22 @@ def verificar_id_deposito(call):
         return
 
     if trader_depositado(trader_id):
-        bot.send_message(chat_id, f"Cuenta verificada ✅. Podés unirte al canal VIP acá:\n\n{LINK_GRUPO_VIP}")
+        texto_exito = (
+            "🎉 ¡Cuenta Verificada Automáticamente! 🎉\n\n"
+            "Comprobamos tu registro y depósito correctamente. Podés unirte al canal VIP ingresando al "
+            f"siguiente enlace:\n\n{LINK_GRUPO_VIP}\n\n"
+            "¡Bienvenido al equipo!"
+        )
+        bot.send_message(chat_id, texto_exito)
         upsert_usuario(chat_id, step=4, last_interaction=time.time())
         logger.info(f"Usuario {chat_id} (trader {trader_id}) accedió al VIP")
     else:
         bot.send_message(
             chat_id,
-            "Tu ID aún no registra la inversión mínima. Esperá unos minutos tras el depósito y volvé a intentar.",
+            "❌ **Tu ID aún no registra la inversión mínima en el sistema.**\n\n"
+            "Recuerda que el proceso puede tardar unos minutos en impactar tras realizar el depósito. "
+            "Si ya lo hiciste, aguardá un momento y volvé a tocar el botón de verificar.",
+            parse_mode="Markdown",
         )
 
 
@@ -223,13 +242,14 @@ def verificar_usuarios_colgados():
                     chat_id = usuario["chat_id"]
                     try:
                         markup = types.InlineKeyboardMarkup()
-                        markup.add(types.InlineKeyboardButton("Continuar proceso", callback_data="pedir_id_registro"))
-                        bot.send_message(
-                            chat_id,
-                            "Viste que empezaste el proceso para el VIP pero no lo terminaste. "
-                            "Tocá abajo para continuar donde quedaste:",
-                            reply_markup=markup,
+                        markup.add(types.InlineKeyboardButton("🚀 Continuar proceso", callback_data="pedir_id_registro"))
+                        texto_reminder = (
+                            "👋 ¡Hola! Vi que te interesó sumarte a nuestra comunidad VIP pero no completaste "
+                            "los pasos. 📈\n\n"
+                            "Recordá que los cupos semanales son limitados y te estás perdiendo las operaciones.\n\n"
+                            "Tocá abajo para continuar donde te quedaste:"
                         )
+                        bot.send_message(chat_id, texto_reminder, reply_markup=markup)
                         upsert_usuario(chat_id, reminded=True)
                         logger.info(f"Recordatorio enviado a {chat_id}")
                     except Exception as e:
