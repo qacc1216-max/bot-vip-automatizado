@@ -152,11 +152,11 @@ def send_welcome(message):
 def pedir_id_registro(call):
     chat_id = call.message.chat.id
     upsert_usuario(chat_id, step=2, last_interaction=time.time())
-    bot.edit_message_text(
+    bot.answer_callback_query(call.id)  # saca el "relojito" de carga del botón
+    bot.send_message(
+        chat_id,
         "📝 Por favor, **escribí tu ID de la plataforma** acá abajo para verificar que tu cuenta se haya creado "
         "correctamente con nuestro enlace:",
-        chat_id,
-        call.message.message_id,
         parse_mode="Markdown",
     )
 
