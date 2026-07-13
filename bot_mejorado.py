@@ -48,7 +48,7 @@ def get_usuario(chat_id):
     return res.data[0] if res.data else None
 
 
-def upsert_usuario(chat_id, step=None, last_interaction=None, reminded=None, trader_id=None):
+def upsert_usuario(chat_id, step=None, last_interaction=None, reminded=None, trader_id=None, seguimientos_enviados=None):
     actual = get_usuario(chat_id) or {}
     payload = {
         "chat_id": chat_id,
@@ -56,6 +56,7 @@ def upsert_usuario(chat_id, step=None, last_interaction=None, reminded=None, tra
         "last_interaction": last_interaction if last_interaction is not None else time.time(),
         "reminded": reminded if reminded is not None else actual.get("reminded", False),
         "trader_id": trader_id if trader_id is not None else actual.get("trader_id"),
+        "seguimientos_enviados": seguimientos_enviados if seguimientos_enviados is not None else actual.get("seguimientos_enviados", 0),
     }
     supabase.table("usuarios").upsert(payload).execute()
 
@@ -81,10 +82,22 @@ def marcar_trader(trader_id, registrado=None, depositado=None):
     supabase.table("traders").upsert(payload).execute()
 
 
+def guardar_mensaje(chat_id, texto):
+    try:
+        supabase.table("mensajes").insert({
+            "chat_id": chat_id,
+            "texto": texto,
+            "fecha": time.time(),
+        }).execute()
+    except Exception as e:
+        logger.error(f"Error guardando mensaje de {chat_id}: {e}")
+
+
 # ----------------------- CAPTURADOR DE FILE ID -----------------------
 @bot.message_handler(content_types=['video'])
 def capturar_file_id(message):
     file_id = message.video.file_id
+    guardar_mensaje(message.chat.id, "[envió un video]")
     logger.info(f"Video recibido, file_id: {file_id}")
     bot.reply_to(message, f"✅ Video recibido. file_id:\n`{file_id}`", parse_mode="Markdown")
 
@@ -123,7 +136,8 @@ def affiliate_postback():
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    upsert_usuario(chat_id, step=1, last_interaction=time.time(), reminded=False)
+    guardar_mensaje(chat_id, "/start")
+    upsert_usuario(chat_id, step=1, last_interaction=time.time(), reminded=False, seguimientos_enviados=0)
     logger.info(f"Nuevo /start de {chat_id}")
 
     markup = types.InlineKeyboardMarkup()
@@ -151,7 +165,7 @@ def send_welcome(message):
 @bot.callback_query_handler(func=lambda call: call.data == "pedir_id_registro")
 def pedir_id_registro(call):
     chat_id = call.message.chat.id
-    upsert_usuario(chat_id, step=2, last_interaction=time.time())
+    upsert_usuario(chat_id, step=2, last_interaction=time.time(), seguimientos_enviados=0)
     bot.answer_callback_query(call.id)  # saca el "relojito" de carga del botón
     bot.send_message(
         chat_id,
@@ -165,6 +179,7 @@ def pedir_id_registro(call):
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def procesar_texto(message):
     chat_id = message.chat.id
+    guardar_mensaje(chat_id, message.text)
     usuario = get_usuario(chat_id)
     if not usuario:
         return
@@ -173,7 +188,7 @@ def procesar_texto(message):
 
     if usuario.get('step') == 2:
         if trader_registrado(id_ingresado):
-            upsert_usuario(chat_id, step=3, last_interaction=time.time(), trader_id=id_ingresado)
+            upsert_usuario(chat_id, step=3, last_interaction=time.time(), trader_id=id_ingresado, seguimientos_enviados=0)
 
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito"))
@@ -227,33 +242,53 @@ def verificar_id_deposito(call):
         )
 
 
-# ----------------------- RECORDATORIO AUTOMÁTICO -----------------------
+# ----------------------- SECUENCIA DE SEGUIMIENTO -----------------------
+# Cada elemento: (segundos desde la última interacción, texto del mensaje)
+# EDITÁ estos textos con contenido real tuyo (testimonios/resultados que vos
+# tengas y puedas mostrar). Los que dejé acá son genéricos, a modo de ejemplo.
+SEGUIMIENTOS = [
+    (
+        7200,  # 2 horas sin avanzar
+        "👋 ¡Hola! Vi que te interesó sumarte a nuestra comunidad VIP pero no completaste "
+        "los pasos. 📈\n\n"
+        "Tocá abajo para continuar donde te quedaste:",
+    ),
+    (
+        86400,  # 24 horas sin avanzar
+        "PLACEHOLDER: acá va tu segundo mensaje de seguimiento. Reemplazá este texto por "
+        "contenido real (por ejemplo, algo que ya le hayas mostrado a otros interesados).",
+    ),
+    (
+        259200,  # 72 horas sin avanzar
+        "PLACEHOLDER: tercer y último mensaje de seguimiento. Ajustalo vos con contenido real.",
+    ),
+]
+
+
 def verificar_usuarios_colgados():
     CHEQUEO_SEGUNDOS = 300
-    UMBRAL_SEGUNDOS = 7200
 
     while True:
         time.sleep(CHEQUEO_SEGUNDOS)
         ahora = time.time()
         try:
-            res = supabase.table("usuarios").select("*").in_("step", [1, 2, 3]).eq("reminded", False).execute()
+            res = supabase.table("usuarios").select("*").in_("step", [1, 2, 3]).execute()
             for usuario in res.data:
-                if ahora - usuario["last_interaction"] > UMBRAL_SEGUNDOS:
-                    chat_id = usuario["chat_id"]
+                chat_id = usuario["chat_id"]
+                enviados = usuario.get("seguimientos_enviados", 0)
+                if enviados >= len(SEGUIMIENTOS):
+                    continue  # ya se mandaron todos los mensajes de la secuencia
+
+                umbral_segundos, texto = SEGUIMIENTOS[enviados]
+                if ahora - usuario["last_interaction"] > umbral_segundos:
                     try:
                         markup = types.InlineKeyboardMarkup()
                         markup.add(types.InlineKeyboardButton("🚀 Continuar proceso", callback_data="pedir_id_registro"))
-                        texto_reminder = (
-                            "👋 ¡Hola! Vi que te interesó sumarte a nuestra comunidad VIP pero no completaste "
-                            "los pasos. 📈\n\n"
-                            "Recordá que los cupos semanales son limitados y te estás perdiendo las operaciones.\n\n"
-                            "Tocá abajo para continuar donde te quedaste:"
-                        )
-                        bot.send_message(chat_id, texto_reminder, reply_markup=markup)
-                        upsert_usuario(chat_id, reminded=True)
-                        logger.info(f"Recordatorio enviado a {chat_id}")
+                        bot.send_message(chat_id, texto, reply_markup=markup)
+                        upsert_usuario(chat_id, seguimientos_enviados=enviados + 1)
+                        logger.info(f"Seguimiento #{enviados + 1} enviado a {chat_id}")
                     except Exception as e:
-                        logger.error(f"Error mandando recordatorio a {chat_id}: {e}")
+                        logger.error(f"Error mandando seguimiento a {chat_id}: {e}")
         except Exception as e:
             logger.error(f"Error revisando usuarios colgados: {e}")
 
