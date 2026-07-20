@@ -176,7 +176,7 @@ def pedir_id_registro(call):
 
 
 # ----------------------- 3. Procesa el ID -----------------------
-@bot.message_handler(func=lambda msg: True, content_types=['text'])
+@bot.message_handler(func=lambda msg: not msg.text.startswith('/'), content_types=['text'])
 def procesar_texto(message):
     chat_id = message.chat.id
     guardar_mensaje(chat_id, message.text)
