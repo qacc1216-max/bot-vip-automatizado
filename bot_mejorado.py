@@ -242,6 +242,40 @@ def verificar_id_deposito(call):
         )
 
 
+# ----------------------- COMANDO DE ADMIN: RECORDATORIO MANUAL -----------------------
+# Solo vos (MI_TELEGRAM_ID) podés usar este comando.
+# Manda un mensaje a todos los que están en step=3 (registrados, sin depositar todavía).
+@bot.message_handler(commands=['avisar_deposito'])
+def avisar_deposito(message):
+    if message.chat.id != MI_TELEGRAM_ID:
+        return  # ignora silenciosamente si no sos vos
+
+    texto_recordatorio = (
+        "Ya diste el primer paso registrándote — no dejes pasar la oportunidad de empezar esta semana. "
+        "Solo falta tu depósito para tener acceso completo al VIP. ¿Ya lo hiciste?"
+    )
+
+    try:
+        res = supabase.table("usuarios").select("*").eq("step", 3).execute()
+        usuarios = res.data
+    except Exception as e:
+        bot.reply_to(message, f"Error consultando usuarios: {e}")
+        return
+
+    enviados = 0
+    fallidos = 0
+    for usuario in usuarios:
+        try:
+            bot.send_message(usuario["chat_id"], texto_recordatorio)
+            enviados += 1
+        except Exception as e:
+            logger.error(f"No se pudo avisar a {usuario['chat_id']}: {e}")
+            fallidos += 1
+
+    bot.reply_to(message, f"✅ Recordatorio enviado a {enviados} personas. Fallidos: {fallidos}.")
+    logger.info(f"Recordatorio manual de depósito: {enviados} enviados, {fallidos} fallidos")
+
+
 # ----------------------- SECUENCIA DE SEGUIMIENTO -----------------------
 # Cada elemento: (segundos desde la última interacción, texto del mensaje)
 # EDITÁ estos textos con contenido real tuyo (testimonios/resultados que vos
