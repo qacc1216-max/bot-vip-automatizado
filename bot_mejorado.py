@@ -28,6 +28,7 @@ MI_TELEGRAM_ID = int(ADMIN_ID_RAW)
 LINK_REGISTRO = os.environ.get('LINK_REGISTRO', "https://stockity-r3.com?a=9e29d7ed3cab&t=0")
 LINK_GRUPO_VIP = os.environ.get('LINK_GRUPO_VIP', "https://t.me/+CwS4WQkN6c80YTYx")
 VIDEO_FILE_ID = os.environ.get('VIDEO_FILE_ID', "")
+VIP_GROUP_ID = os.environ.get('VIP_GROUP_ID')  # ID numérico del grupo/canal VIP, ej: -1001234567890
 
 # ----------------------- LOGGING -----------------------
 logging.basicConfig(
@@ -276,6 +277,34 @@ def avisar_deposito(message):
     logger.info(f"Recordatorio manual de depósito: {enviados} enviados, {fallidos} fallidos")
 
 
+# ----------------------- COMANDO DE ADMIN: RESULTADO DE SESIÓN -----------------------
+# Manda un resumen (ganadas/perdidas) al grupo VIP. Por ahora el texto es fijo,
+# después lo cambiamos para que puedas pasarle los números.
+@bot.message_handler(commands=['resultado_sesion'])
+def resultado_sesion(message):
+    if message.chat.id != MI_TELEGRAM_ID:
+        return
+
+    if not VIP_GROUP_ID:
+        bot.reply_to(message, "⚠️ Falta configurar VIP_GROUP_ID en las variables de entorno.")
+        return
+
+    texto = (
+        "📊 Resultado de la sesión de hoy en el VIP:\n"
+        "✅ Ganadas: 3\n"
+        "❌ Perdidas: 1\n\n"
+        "¡Buena sesión para seguir sumando experiencia!"
+    )
+
+    try:
+        bot.send_message(int(VIP_GROUP_ID), texto)
+        bot.reply_to(message, "✅ Resultado publicado en el grupo VIP.")
+        logger.info("Resultado de sesión publicado en el grupo VIP")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ No se pudo publicar: {e}")
+        logger.error(f"Error publicando resultado de sesión: {e}")
+
+
 # ----------------------- SECUENCIA DE SEGUIMIENTO -----------------------
 # Cada elemento: (segundos desde la última interacción, texto del mensaje)
 # EDITÁ estos textos con contenido real tuyo (testimonios/resultados que vos
@@ -289,12 +318,13 @@ SEGUIMIENTOS = [
     ),
     (
         86400,  # 24 horas sin avanzar
-        "PLACEHOLDER: acá va tu segundo mensaje de seguimiento. Reemplazá este texto por "
-        "contenido real (por ejemplo, algo que ya le hayas mostrado a otros interesados).",
+        "Che, ¿todo bien? Vi que empezaste el proceso para el VIP pero quedó a mitad de camino. "
+        "Si tenés alguna duda con el registro, contame y te ayudo a resolverla.",
     ),
     (
         259200,  # 72 horas sin avanzar
-        "PLACEHOLDER: tercer y último mensaje de seguimiento. Ajustalo vos con contenido real.",
+        "Este es el último aviso antes de dejar tu lugar disponible para otra persona. Si todavía "
+        "te interesa sumarte al VIP, completá el registro ahora.",
     ),
 ]
 
