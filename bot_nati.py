@@ -208,4 +208,5 @@ def run_flask():
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling(skip_pending_requests=True)
+    bot.remove_webhook()
+    bot.infinity_polling()
