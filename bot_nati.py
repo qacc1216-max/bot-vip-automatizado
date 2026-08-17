@@ -48,8 +48,18 @@ def upsert_usuario(chat_id, step=1, trader_id=None, reminded=False, seguimientos
 def get_trader(trader_id):
     try:
         trader_id_str = str(trader_id).strip()
+        # Busca como texto
         res = supabase.table("traders").select("trader_id, registrado, depositado").eq("trader_id", trader_id_str).execute()
-        return res.data[0] if res.data else None
+        if res.data:
+            return res.data[0]
+        
+        # Si no lo encuentra como texto y es numérico, busca como número entero
+        if trader_id_str.isdigit():
+            res_num = supabase.table("traders").select("trader_id, registrado, depositado").eq("trader_id", int(trader_id_str)).execute()
+            if res_num.data:
+                return res_num.data[0]
+                
+        return None
     except Exception as e:
         print(f"Error en get_trader: {e}")
         return None
@@ -59,13 +69,15 @@ def marcar_trader(trader_id, registrado=False, depositado=False):
         trader_id_str = str(trader_id).strip()
         res = get_trader(trader_id_str)
         if res:
+            # Usamos el ID exacto que ya existe en la base de datos
+            real_id = res.get("trader_id")
             data_update = {}
             if registrado:
                 data_update["registrado"] = True
             if depositado:
                 data_update["depositado"] = True
             if data_update:
-                supabase.table("traders").update(data_update).eq("trader_id", trader_id_str).execute()
+                supabase.table("traders").update(data_update).eq("trader_id", real_id).execute()
         else:
             supabase.table("traders").insert({
                 "trader_id": trader_id_str,
