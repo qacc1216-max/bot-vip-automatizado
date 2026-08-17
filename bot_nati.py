@@ -47,48 +47,62 @@ def upsert_usuario(chat_id, step=1, trader_id=None, reminded=False, seguimientos
 
 def get_trader(trader_id):
     try:
-        trader_id_str = str(trader_id).strip()
-        # Busca como texto
-        res = supabase.table("traders").select("trader_id, registrado, depositado").eq("trader_id", trader_id_str).execute()
+        trader_id_clean = str(trader_id).strip()
+        
+        # 1. Intentar buscar como string/texto
+        res = supabase.table("traders").select("*").eq("trader_id", trader_id_clean).execute()
         if res.data:
             return res.data[0]
-        
-        # Si no lo encuentra como texto y es numérico, busca como número entero
-        if trader_id_str.isdigit():
-            res_num = supabase.table("traders").select("trader_id, registrado, depositado").eq("trader_id", int(trader_id_str)).execute()
-            if res_num.data:
-                return res_num.data[0]
+            
+        # 2. Si es numérico, intentar buscar como entero
+        if trader_id_clean.isdigit():
+            res_int = supabase.table("traders").select("*").eq("trader_id", int(trader_id_clean)).execute()
+            if res_int.data:
+                return res_int.data[0]
                 
         return None
     except Exception as e:
-        print(f"Error en get_trader: {e}")
+        print(f"❌ Error en get_trader para ID {trader_id}: {e}")
         return None
 
 def marcar_trader(trader_id, registrado=False, depositado=False):
     try:
-        trader_id_str = str(trader_id).strip()
-        res = get_trader(trader_id_str)
-        if res:
-            # Usamos el ID exacto que ya existe en la base de datos
-            real_id = res.get("trader_id")
+        trader_id_clean = str(trader_id).strip()
+        existente = get_trader(trader_id_clean)
+
+        if existente:
+            # ID real guardado en la base de datos
+            id_db = existente.get("trader_id")
             data_update = {}
             if registrado:
                 data_update["registrado"] = True
             if depositado:
                 data_update["depositado"] = True
+            
             if data_update:
-                supabase.table("traders").update(data_update).eq("trader_id", real_id).execute()
+                supabase.table("traders").update(data_update).eq("trader_id", id_db).execute()
         else:
+            # Guardamos como número si es posible, sino como texto
+            val_to_insert = int(trader_id_clean) if trader_id_clean.isdigit() else trader_id_clean
             supabase.table("traders").insert({
-                "trader_id": trader_id_str,
+                "trader_id": val_to_insert,
                 "registrado": registrado,
                 "depositado": depositado
             }).execute()
         return True
     except Exception as e:
-        print(f"Error en marcar_trader: {e}")
-        return False
-
+        print(f"❌ Error en marcar_trader para ID {trader_id}: {e}")
+        # Intento de fallback insertando directamente como texto
+        try:
+            supabase.table("traders").insert({
+                "trader_id": str(trader_id).strip(),
+                "registrado": registrado,
+                "depositado": depositado
+            }).execute()
+            return True
+        except Exception as e2:
+            print(f"❌ Error en fallback de marcar_trader: {e2}")
+            return False
 # --- WEBHOOK / POSTBACK FLASK ---
 
 @app.route('/postback', methods=['GET', 'POST'])
