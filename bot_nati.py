@@ -45,7 +45,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ----------------------- HELPERS DE BASE DE DATOS -----------------------
 
 def get_usuario(chat_id):
-    res = supabase.table("usuarios").select("*").eq("chat_id", chat_id).execute()
+    res = supabase.table("usuarios").select().eq("chat_id", chat_id).execute()
     return res.data[0] if res.data else None
 
 
@@ -73,7 +73,7 @@ def trader_depositado(trader_id):
 
 
 def marcar_trader(trader_id, registrado=None, depositado=None):
-    res = supabase.table("traders").select("*").eq("trader_id", trader_id).execute()
+    res = supabase.table("traders").select().eq("trader_id", trader_id).execute()
     actual = res.data[0] if res.data else {}
     payload = {
         "trader_id": trader_id,
