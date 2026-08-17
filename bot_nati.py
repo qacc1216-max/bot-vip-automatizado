@@ -139,42 +139,40 @@ def callback_verificar(call):
     upsert_usuario(chat_id, step=2)
     bot.send_message(chat_id, "Por favor, escribí y enviá tu **ID de Trader** (números solamente):", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda message: message.text and message.text.strip().isdigit())
 def process_id(message):
     chat_id = message.chat.id
-    usr = get_usuario(chat_id)
+    trader_id = message.text.strip()
 
-    if usr and usr.get("step") == 2:
-        trader_id = message.text.strip()
+    upsert_usuario(chat_id, step=3, trader_id=trader_id)
+    trader_info = get_trader(trader_id)
 
-        if not trader_id.isdigit():
-            bot.send_message(chat_id, "❌ Por favor enviá un ID válido compuesto solo por números.")
-            return
-
-        upsert_usuario(chat_id, step=3, trader_id=trader_id)
-        trader_info = get_trader(trader_id)
-
-        if trader_info and trader_info.get("depositado"):
-            markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("🚀 ENTRAR AL CANAL VIP", url=LINK_GRUPO_VIP))
-            bot.send_message(chat_id, "✅ ¡Felicidades! Tu ID y depósito están confirmados.\n\nPodés ingresar al VIP desde aquí:", reply_markup=markup)
-        elif trader_info and trader_info.get("registrado"):
-            markup = telebot.types.InlineKeyboardMarkup()
-            markup.add(telebot.types.InlineKeyboardButton("🆔 Ya deposité, verificar mi ID", callback_data="verificar_deposito"))
-            bot.send_message(
-                chat_id,
-                f"✅ Tu registro con ID `{trader_id}` está confirmado.\n\n"
-                "📌 **Siguiente paso:** Hacé tu primer depósito en la plataforma para activar tu acceso al VIP.",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-        else:
-            bot.send_message(
-                chat_id,
-                f"❌ El ID `{trader_id}` aún no aparece registrado en nuestro sistema.\n\n"
-                "Asegurate de haber creado la cuenta desde nuestro enlace de registro y aguardá unos minutos.",
-                parse_mode="Markdown"
-            )
+    if trader_info and trader_info.get("depositado"):
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🚀 ENTRAR AL CANAL VIP", url=LINK_GRUPO_VIP))
+        bot.send_message(
+            chat_id, 
+            f"✅ ¡Felicidades! Tu ID `{trader_id}` y depósito están confirmados.\n\nPodés ingresar al VIP desde aquí:", 
+            reply_markup=markup, 
+            parse_mode="Markdown"
+        )
+    elif trader_info and trader_info.get("registrado"):
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.add(telebot.types.InlineKeyboardButton("🆔 Ya deposité, verificar mi ID", callback_data="verificar_deposito"))
+        bot.send_message(
+            chat_id,
+            f"✅ Tu registro con ID `{trader_id}` está confirmado.\n\n"
+            "📌 **Siguiente paso:** Hacé tu primer depósito en la plataforma para activar tu acceso al VIP.",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            f"❌ El ID `{trader_id}` aún no aparece registrado en nuestro sistema.\n\n"
+            "Asegurate de haber creado la cuenta desde nuestro enlace de registro y aguardá unos minutos.",
+            parse_mode="Markdown"
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data == "verificar_deposito")
 def callback_verificar_deposito(call):
