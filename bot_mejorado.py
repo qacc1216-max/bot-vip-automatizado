@@ -329,32 +329,42 @@ SEGUIMIENTOS = [
 ]
 
 
+   # ⏰ RECORDATORIO AUTOMÁTICO ACTUALIZADO
 def verificar_usuarios_colgados():
-    CHEQUEO_SEGUNDOS = 300
-
     while True:
-        time.sleep(CHEQUEO_SEGUNDOS)
+        time.sleep(3600)  # Revisa cada hora
         ahora = time.time()
-        try:
-            res = supabase.table("usuarios").select("*").in_("step", [1, 2, 3]).execute()
-            for usuario in res.data:
-                chat_id = usuario["chat_id"]
-                enviados = usuario.get("seguimientos_enviados", 0)
-                if enviados >= len(SEGUIMIENTOS):
-                    continue  # ya se mandaron todos los mensajes de la secuencia
-
-                umbral_segundos, texto = SEGUIMIENTOS[enviados]
-                if ahora - usuario["last_interaction"] > umbral_segundos:
+        for chat_id, data in list(user_data.items()):
+            # Se envía a quienes iniciaron el proceso pero no llegaron a verificar su depósito (pasos 1, 2 o 3)
+            if data['step'] in [1, 2, 3] and not data.get('reminded', False):
+                # Si pasaron más de 2 horas (7200 segundos) desde la última interacción
+                if ahora - data['last_interaction'] > 7200:
                     try:
                         markup = types.InlineKeyboardMarkup()
-                        markup.add(types.InlineKeyboardButton("🚀 Continuar proceso", callback_data="pedir_id_registro"))
-                        bot.send_message(chat_id, texto, reply_markup=markup)
-                        upsert_usuario(chat_id, seguimientos_enviados=enviados + 1)
-                        logger.info(f"Seguimiento #{enviados + 1} enviado a {chat_id}")
-                    except Exception as e:
-                        logger.error(f"Error mandando seguimiento a {chat_id}: {e}")
-        except Exception as e:
-            logger.error(f"Error revisando usuarios colgados: {e}")
+                        btn_continuar = types.InlineKeyboardButton("🚀 Continuar mi registro", callback_data="pedir_id_registro")
+                        markup.add(btn_continuar)
+                        
+                        texto_recordatorio = (
+                            "¡Aviso rápido por acá! 🚨\n\n"
+                            "Si de verdad quieres empezar a operar en serio y llevarte un ingreso extra, escríbeme hoy. "
+                            "Estoy haciendo la reestructuración del grupo VIP para octubre y solo le daré acceso a los que estén activos.\n\n"
+                            "Si te activas hoy, te meto de una a:\n\n"
+                            "💰 El sorteo exclusivo de $200 USD en efectivo entre los miembros VIP\n"
+                            "📊 Las señales VIP con las mejores entradas del día\n"
+                            "🔴 Las sesiones en vivo para operar juntos en tiempo real\n"
+                            "📈 El análisis del mercado para ir siempre un paso adelante\n"
+                            "🛡️ La plantilla de gestión de riesgo para cuidar tu capital\n"
+                            "🎁 Un bono extra del 70% en tu recarga\n\n"
+                            "⚠️ **Dato clave:** Hasta este miércoles te sumas con el depósito mínimo de la plataforma ($25 USD). "
+                            "Después del miércoles el mínimo de ingreso sube a $50 USD.\n\n"
+                            "Tengo un par de cupos para las próximas sesiones, así que mándame un mensaje directo con la palabra "
+                            "\"ACTIVO\" y te paso los pasos para entrar de una. ¡Nos vemos adentro!"
+                        )
+                        
+                        bot.send_message(chat_id, texto_recordatorio, reply_markup=markup, parse_mode="Markdown")
+                        user_data[chat_id]['reminded'] = True
+                    except Exception:
+                        pass
 
 
 @app.route('/')
