@@ -386,3 +386,42 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
+# 📢 COMANDO MASIVO /difundir PARA EL ADMINISTRADOR
+@bot.message_handler(commands=['difundir'])
+def difundir_mensaje(message):
+    # Solo tú puedes ejecutar este comando
+    if message.chat.id != MI_TELEGRAM_ID:
+        return
+
+    texto_anuncio = (
+        "¡Aviso rápido por acá! 🚨\n\n"
+        "Si de verdad quieres empezar a operar en serio y llevarte un ingreso extra, escríbeme hoy. "
+        "Estoy haciendo la reestructuración del grupo VIP para octubre y solo le daré acceso a los que estén activos.\n\n"
+        "Si te activas hoy, te meto de una a:\n\n"
+        "💰 El sorteo exclusivo de $200 USD en efectivo entre los miembros VIP\n"
+        "📊 Las señales VIP con las mejores entradas del día\n"
+        "🔴 Las sesiones en vivo para operar juntos en tiempo real\n"
+        "📈 El análisis del mercado para ir siempre un paso adelante\n"
+        "🛡️ La plantilla de gestión de riesgo para cuidar tu capital\n"
+        "🎁 Un bono extra del 70% en tu recarga\n\n"
+        "⚠️ **Dato clave:** Hasta este miércoles te sumas con el depósito mínimo de la plataforma ($25 USD). "
+        "Después del miércoles el mínimo de ingreso sube a $50 USD.\n\n"
+        "Tengo un par de cupos para las próximas sesiones, así que mándame un mensaje directo con la palabra "
+        "\"ACTIVO\" y te paso los pasos para entrar de una. ¡Nos vemos adentro!"
+    )
+
+    markup = types.InlineKeyboardMarkup()
+    btn_continuar = types.InlineKeyboardButton("🚀 Continuar mi registro", callback_data="pedir_id_registro")
+    markup.add(btn_continuar)
+
+    enviados = 0
+    # Recorre los chats guardados en la memoria del bot
+    for chat_id in list(user_data.keys()):
+        try:
+            bot.send_message(chat_id, texto_anuncio, reply_markup=markup, parse_mode="Markdown")
+            enviados += 1
+            time.sleep(0.05)
+        except Exception:
+            pass
+
+    bot.send_message(MI_TELEGRAM_ID, f"📢 Difusión completada. Mensaje enviado a {enviados} usuario(s).")
