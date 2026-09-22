@@ -11,7 +11,7 @@ MI_TELEGRAM_ID = int(os.environ.get('ADMIN_ID', 1630411628))
 
 # ENLACES OFICIALES
 LINK_REGISTRO = "https://stockity-r3.com?a=9e29d7ed3cab&t=0"
-LINK_GRUPO_VIP = "https://t.me/+CwS4WQkN6c80YTYx"
+LINK_GRUPO_VIP = "https://t.me/+8E9efv0SxMlhNGI5"
 VIDEO_FILE_ID = "BAACAgEAAxkBAAMialGwteT-YHVgaHhNTRPl5aReFucAAloIAAKgVpFGObGcQkEezi88BA"
 
 bot = telebot.TeleBot(TOKEN)
