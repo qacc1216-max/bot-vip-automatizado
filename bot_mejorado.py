@@ -5,9 +5,11 @@ from flask import Flask, request
 import threading
 import time
 
+import handoff
+
 # CONFIGURACIÓN ESENCIAL
-TOKEN = os.environ.get('TELEGRAM_TOKEN', '8943668513:AAHnPjS7ZfHUBlS7VpKi35hK6dJpLrEmbk0')
-MI_TELEGRAM_ID = int(os.environ.get('ADMIN_ID', 1630411628))
+TOKEN = os.environ['TELEGRAM_TOKEN']
+MI_TELEGRAM_ID = int(os.environ['ADMIN_ID'])
 
 # ENLACES OFICIALES
 LINK_REGISTRO = "https://stockity-r3.com?a=9e29d7ed3cab&t=0"
@@ -16,6 +18,9 @@ VIDEO_FILE_ID = "BAACAgEAAxkBAAMialGwteT-YHVgaHhNTRPl5aReFucAAloIAAKgVpFGObGcQkE
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
+
+# Conectamos el módulo de handoff con tu admin id y Supabase
+handoff.configure(admin_chat_id=MI_TELEGRAM_ID)
 
 # Listas de memoria
 traders_registrados = set()
@@ -65,7 +70,7 @@ def difundir_mensaje(message):
     markup.add(btn_continuar)
 
     destinatarios = chats_conocidos.union(set(user_data.keys()))
-    
+
     if not destinatarios:
         bot.send_message(MI_TELEGRAM_ID, "⚠️ No hay usuarios registrados en la sesión actual para difundir.")
         return
@@ -81,12 +86,15 @@ def difundir_mensaje(message):
 
     bot.send_message(MI_TELEGRAM_ID, f"📢 Difusión completada. Mensaje enviado a {enviados} usuario(s).")
 
+# ✋ COMANDOS DE HANDOFF: /pausar y /reanudar (ver handoff.py)
+handoff.register_commands(bot)
+
 # 📥 POSTBACK
 @app.route('/postback', methods=['GET'])
 def affiliate_postback():
     trader_id = request.args.get('trader_id')
     evento = request.args.get('event', 'registro')
-    
+
     if trader_id:
         trader_id = trader_id.strip()
         if evento == 'registro':
@@ -94,12 +102,12 @@ def affiliate_postback():
         elif evento == 'deposito':
             traders_depositados.add(trader_id)
             traders_registrados.add(trader_id)
-        
+
         try:
             bot.send_message(MI_TELEGRAM_ID, f"💰 ¡Postback Recibido!\nID de Trader: {trader_id} realizó un {evento}.")
         except Exception:
             pass
-            
+
     return "OK", 200
 
 # 1. BIENVENIDA
@@ -107,13 +115,13 @@ def affiliate_postback():
 def send_welcome(message):
     chat_id = message.chat.id
     actualizar_usuario(chat_id, 1)
-    
+
     markup = types.InlineKeyboardMarkup()
     btn_registro = types.InlineKeyboardButton("🔗 Registrarme en la Plataforma", url=LINK_REGISTRO)
     btn_siguiente = types.InlineKeyboardButton("✅ Ya me registré, verificar mi ID", callback_data="pedir_id_registro")
     markup.add(btn_registro)
     markup.add(btn_siguiente)
-    
+
     texto = (
         "¡Hola! 👋 Bienvenido/a al sistema de acceso automático para el **Grupo VIP**.\n\n"
         "Para ingresar, el primer paso es crearte una cuenta usando nuestro enlace oficial.\n\n"
@@ -121,7 +129,7 @@ def send_welcome(message):
         "Luego, tocá el botón para crear tu cuenta:"
     )
     bot.send_message(chat_id, texto, reply_markup=markup, parse_mode="Markdown")
-    
+
     if VIDEO_FILE_ID != "TU_FILE_ID_DE_TELEGRAM_AQUI":
         try:
             bot.send_video(chat_id, VIDEO_FILE_ID, caption="🎬 Tutorial completo de registro paso a paso.")
@@ -133,33 +141,49 @@ def send_welcome(message):
 def pedir_id_registro(call):
     chat_id = call.message.chat.id
     actualizar_usuario(chat_id, 2)
-    
+
     bot.edit_message_text(
-        "📝 Por favor, **escribí tu ID de la plataforma** acá abajo para verificar que tu cuenta se haya creado correctamente con nuestro enlace:", 
-        chat_id, 
+        "📝 Por favor, **escribí tu ID de la plataforma** acá abajo para verificar que tu cuenta se haya creado correctamente con nuestro enlace:",
+        chat_id,
         call.message.message_id,
         parse_mode="Markdown"
     )
 
-# 3. PROCESAR ID
+# 3. PROCESAR TEXTO (acá se mete el handoff)
 @bot.message_handler(func=lambda msg: True, content_types=['text'])
 def procesar_texto(message):
     chat_id = message.chat.id
+
+    # ── Si el que escribe sos vos (el admin) ──────────────────────────
+    if chat_id == MI_TELEGRAM_ID:
+        # Si es un reply a un mensaje reenviado de un alumno, se lo mandamos a él
+        handoff.handle_admin_reply(bot, message)
+        return
+
+    # ── Si es un alumno: reenviamos su mensaje a tu chat con historial ─
+    handoff.forward_to_admin(bot, message)
+
+    if handoff.is_paused(chat_id):
+        # Estás contestando vos manualmente a este alumno puntual:
+        # el bot no corre su lógica automática para él.
+        return
+
+    # ── A partir de acá sigue tu lógica original, sin cambios ─────────
     actualizar_usuario(chat_id, user_data.get(chat_id, {}).get('step', 1))
-    
+
     id_ingresado = message.text.strip()
     step_actual = user_data[chat_id].get('step')
-    
+
     if step_actual == 2:
         if id_ingresado in traders_registrados:
             user_data[chat_id]['step'] = 3
             user_data[chat_id]['last_interaction'] = time.time()
             user_data[chat_id]['trader_id'] = id_ingresado
-            
+
             markup = types.InlineKeyboardMarkup()
             btn_verificar_depo = types.InlineKeyboardButton("🆔 Ya deposité, ingresar al VIP", callback_data="verificar_id_deposito")
             markup.add(btn_verificar_depo)
-            
+
             texto_depo = (
                 "✅ **Registro confirmado**\n\n"
                 "Para unirte al canal VIP y acceder a nuestras mentorías privadas diarias (en TikTok y por mensaje), "
@@ -180,11 +204,11 @@ def procesar_texto(message):
 def verificar_id_deposito(call):
     chat_id = call.message.chat.id
     trader_id = user_data.get(chat_id, {}).get('trader_id')
-    
+
     if not trader_id:
         bot.send_message(chat_id, "Por favor, ingresá tu ID de registro primero usando /start.")
         return
-        
+
     if trader_id in traders_depositados:
         texto_exito = (
             "🎉 ¡Cuenta Verificada Automáticamente! 🎉\n\n"
@@ -214,7 +238,7 @@ def verificar_usuarios_colgados():
                         markup = types.InlineKeyboardMarkup()
                         btn_continuar = types.InlineKeyboardButton("🚀 Continuar mi registro", callback_data="pedir_id_registro")
                         markup.add(btn_continuar)
-                        
+
                         texto_recordatorio = (
                             "¡Aviso rápido por acá! 🚨\n\n"
                             "Si de verdad quieres empezar a operar en serio y llevarte un ingreso extra, escríbeme hoy. "
@@ -245,7 +269,7 @@ if __name__ == "__main__":
         bot.delete_webhook()
     except Exception:
         pass
-        
+
     threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=telebot.util.update_types)).start()
     threading.Thread(target=verificar_usuarios_colgados, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
