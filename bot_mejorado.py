@@ -168,6 +168,12 @@ def procesar_texto(message):
         # el bot no corre su lógica automática para él.
         return
 
+    # ── Palabras clave: "VIP" o "ACTIVO" arrancan el flujo como si tocaran /start ──
+    palabra = message.text.strip().lower().strip("¡!¿?.,\"' ")
+    if palabra in ("vip", "activo"):
+        send_welcome(message)
+        return
+
     # ── A partir de acá sigue tu lógica original, sin cambios ─────────
     actualizar_usuario(chat_id, user_data.get(chat_id, {}).get('step', 1))
 
